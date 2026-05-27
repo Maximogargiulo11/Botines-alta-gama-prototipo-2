@@ -1,0 +1,43 @@
+## render.yaml — Configuración de infraestructura para Render
+## Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: botines-alta-gama
+    env: node
+    region: oregon          # cambiá a "frankfurt" si querés Europa
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Estas tres las cargás manualmente en el dashboard de Render:
+      - key: ADMIN_USERNAME
+        sync: false         # Render te las va a pedir al deployar
+
+      - key: ADMIN_PASSWORD
+        sync: false
+
+      - key: JWT_SECRET
+        sync: false
+
+      # URL del frontend (Vercel u otro) — para CORS:
+      - key: FRONTEND_URL
+        sync: false
+
+      # La URL de la DB se inyecta automáticamente desde la db de abajo:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: botines-db
+          property: connectionString
+
+databases:
+  - name: botines-db
+    databaseName: botines_alta_gama
+    user: botines_user
+    region: oregon
+    plan: free              # PostgreSQL gratis en Render (expira en 90 días en free tier)

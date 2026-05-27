@@ -15,9 +15,13 @@ const allowedOrigins = [
 ];
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) cb(null, true);
-    else cb(null, true), // en producción podés poner cb(new Error('CORS')) para restringir
-    void 0;
+    // Sin origen = request interno (server-to-server) o mismo origen → OK
+    if (!origin) return cb(null, true);
+    // Si el origen está en la lista → OK
+    if (allowedOrigins.some(o => origin.startsWith(o))) return cb(null, true);
+    // En producción podrías rechazar: return cb(new Error('CORS'));
+    // Por ahora permitimos todo para evitar problemas en desarrollo
+    return cb(null, true);
   },
   credentials: true,
 }));
