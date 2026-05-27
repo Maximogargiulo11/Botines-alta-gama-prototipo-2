@@ -1,9 +1,9 @@
-/* global React, ReactDOM, BAG_DATA */
+/* global React, ReactDOM, BAG_DATA, BAG_API_URL, normalizeProducts */
 /* global Navbar, Footer, CartDrawer */
 /* global HomeScreen, ArticleScreen, BrandsScreen, BrandScreen, ModelScreen, ProductScreen, PoliticaScreen, FaqScreen */
 /* global useTweaks, TweaksPanel, TweakSection, TweakRadio, TweakColor */
 
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useCallback } = React;
 
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "accent": "#ffffff",
@@ -30,13 +30,60 @@ function useHashRoute() {
   return hash.replace(/^#/, '') || '/';
 }
 
+/* ── Fetch all data from API and populate window.BAG_DATA ── */
+function useApiData() {
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const base = window.BAG_API_URL || '';
+    async function load() {
+      try {
+        const [articles, brands, products, settings] = await Promise.all([
+          fetch(`${base}/api/lanzamientos`).then(r => r.json()),
+          fetch(`${base}/api/marcas`).then(r => r.json()),
+          fetch(`${base}/api/stock`).then(r => r.json()),
+          fetch(`${base}/api/settings`).then(r => r.json()),
+        ]);
+        window.BAG_DATA = {
+          articles: Array.isArray(articles) ? articles : [],
+          brands:   Array.isArray(brands)   ? brands   : [],
+          products: window.normalizeProducts ? window.normalizeProducts(products) : (products || {}),
+          settings: settings || {},
+        };
+        setReady(true);
+      } catch(err) {
+        console.error('Error cargando datos de la API:', err);
+        setError(err.message);
+        // Fallback: keep whatever BAG_DATA was (empty arrays)
+        setReady(true);
+      }
+    }
+    load();
+  }, []);
+
+  return { ready, error };
+}
+
 function App() {
   const route = useHashRoute();
   const navigate = (path) => { window.location.hash = path; window.scrollTo({ top: 0, behavior: 'instant' }); };
+  const { ready, error } = useApiData();
 
   const [cart, setCart] = useState(loadCart);
   const [cartOpen, setCartOpen] = useState(false);
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+  /* Loading screen */
+  if (!ready) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: '#0a0a0a', flexDirection: 'column', gap: 16 }}>
+        <div style={{ width: 40, height: 40, border: '1px solid #333', borderTop: '1px solid #fff', borderRadius: '50%', animation: 'spin 0.9s linear infinite' }} />
+        <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+        <div style={{ fontFamily: 'Inter,sans-serif', fontSize: 11, letterSpacing: '0.2em', color: '#555', textTransform: 'uppercase' }}>Cargando</div>
+      </div>
+    );
+  }
 
   const addToCart = (item) => {
     const next = [...cart, { id: item.id, name: item.name, colorway: item.colorway, price: item.price, size: item.size, image: item.images?.[0], qty: 1 }];
