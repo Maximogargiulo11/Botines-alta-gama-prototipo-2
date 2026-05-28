@@ -1,12 +1,12 @@
 const express = require('express');
-const router = express.Router();
-const { pool } = require('../data/db');
+const router  = express.Router();
+const { db } = require('../data/db');
 const { requireAuth } = require('../middleware/auth');
 
-/* GET /api/settings — returns { home_articles_count: '6', home_catalog_count: '4', ... } */
-router.get('/', async (req, res) => {
+/* GET /api/settings */
+router.get('/', (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT key, value FROM settings');
+    const rows = db.prepare('SELECT key, value FROM settings').all();
     const obj = {};
     rows.forEach(r => { obj[r.key] = r.value; });
     res.json(obj);
@@ -16,19 +16,21 @@ router.get('/', async (req, res) => {
 });
 
 /* PUT /api/settings — requires auth — body: { key: value, ... } */
-router.put('/', requireAuth, async (req, res) => {
+router.put('/', requireAuth, (req, res) => {
   const updates = req.body;
   if (!updates || typeof updates !== 'object') {
     return res.status(400).json({ error: 'Body inválido' });
   }
   try {
-    for (const [key, value] of Object.entries(updates)) {
-      await pool.query(
-        'INSERT INTO settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2',
-        [key, String(value)]
-      );
-    }
-    const { rows } = await pool.query('SELECT key, value FROM settings');
+    const upsert = db.prepare(
+      'INSERT INTO settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+    );
+    const upsertAll = db.transaction((entries) => {
+      for (const [key, value] of entries) upsert.run(key, String(value));
+    });
+    upsertAll(Object.entries(updates));
+
+    const rows = db.prepare('SELECT key, value FROM settings').all();
     const obj = {};
     rows.forEach(r => { obj[r.key] = r.value; });
     res.json(obj);

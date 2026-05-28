@@ -1,19 +1,17 @@
 const express = require('express');
-const router = express.Router();
-const { pool } = require('../data/db');
+const router  = express.Router();
+const { db, parseProduct } = require('../data/db');
 const { requireAuth } = require('../middleware/auth');
 
-/* GET /api/stock
-   Returns products grouped by brand/model: { 'nike/mercurial': [...], ... }
-*/
-router.get('/', async (req, res) => {
+/* GET /api/stock — returns products grouped by brand/model */
+router.get('/', (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM products ORDER BY brand_slug, model_slug, name');
+    const rows = db.prepare('SELECT * FROM products ORDER BY brand_slug, model_slug, name').all();
     const grouped = {};
     rows.forEach(p => {
       const key = `${p.brand_slug}/${p.model_slug}`;
       if (!grouped[key]) grouped[key] = [];
-      grouped[key].push(p);
+      grouped[key].push(parseProduct(p));
     });
     res.json(grouped);
   } catch (err) {
@@ -22,40 +20,40 @@ router.get('/', async (req, res) => {
 });
 
 /* GET /api/stock/list — flat list for admin panel */
-router.get('/list', async (req, res) => {
+router.get('/list', (req, res) => {
   try {
     const { brand, model } = req.query;
-    let query = 'SELECT * FROM products';
+    let sql = 'SELECT * FROM products';
     const params = [];
     if (brand) {
+      sql += ' WHERE brand_slug = ?';
       params.push(brand);
-      query += ` WHERE brand_slug = $${params.length}`;
       if (model) {
+        sql += ' AND model_slug = ?';
         params.push(model);
-        query += ` AND model_slug = $${params.length}`;
       }
     }
-    query += ' ORDER BY brand_slug, model_slug, name';
-    const { rows } = await pool.query(query, params);
-    res.json(rows);
+    sql += ' ORDER BY brand_slug, model_slug, name';
+    const rows = db.prepare(sql).all(...params);
+    res.json(rows.map(parseProduct));
   } catch (err) {
     res.status(500).json({ error: 'Error obteniendo productos' });
   }
 });
 
 /* GET /api/stock/:id */
-router.get('/:id', async (req, res) => {
+router.get('/:id', (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
-    if (!rows.length) return res.status(404).json({ error: 'Producto no encontrado' });
-    res.json(rows[0]);
+    const row = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Producto no encontrado' });
+    res.json(parseProduct(row));
   } catch (err) {
     res.status(500).json({ error: 'Error obteniendo producto' });
   }
 });
 
 /* POST /api/stock — requires auth */
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, (req, res) => {
   const {
     id, brand_slug, model_slug, name, colorway, color, price,
     sizes, available_sizes, images, spec,
@@ -65,67 +63,71 @@ router.post('/', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'brand_slug, model_slug y name son obligatorios' });
   }
 
-  const productId = id || `${brand_slug.slice(0,3)}-${Date.now()}`;
+  const productId = id || `${brand_slug.slice(0, 3)}-${Date.now()}`;
 
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO products
+    db.prepare(`
+      INSERT INTO products
         (id, brand_slug, model_slug, name, colorway, color, price,
          sizes, available_sizes, images, spec)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING *`,
-      [
-        productId, brand_slug, model_slug, name, colorway, color || '#ffffff',
-        parseInt(price) || 0,
-        JSON.stringify(sizes || { eu: [], us: [], uk: [] }),
-        JSON.stringify(available_sizes || []),
-        JSON.stringify(images || []),
-        JSON.stringify(spec || {}),
-      ]
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      productId, brand_slug, model_slug, name,
+      colorway || null, color || '#ffffff', parseInt(price) || 0,
+      JSON.stringify(sizes           || { eu: [], us: [], uk: [] }),
+      JSON.stringify(available_sizes || []),
+      JSON.stringify(images          || []),
+      JSON.stringify(spec            || {}),
     );
-    res.status(201).json(rows[0]);
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
+    res.status(201).json(parseProduct(product));
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Ya existe un producto con ese ID' });
+    if (err.message.includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'Ya existe un producto con ese ID' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error creando producto' });
   }
 });
 
 /* PUT /api/stock/:id — requires auth */
-router.put('/:id', requireAuth, async (req, res) => {
+router.put('/:id', requireAuth, (req, res) => {
   const {
     brand_slug, model_slug, name, colorway, color, price,
     sizes, available_sizes, images, spec,
   } = req.body;
 
   try {
-    const { rows } = await pool.query(
-      `UPDATE products SET
-        brand_slug     = COALESCE($1, brand_slug),
-        model_slug     = COALESCE($2, model_slug),
-        name           = COALESCE($3, name),
-        colorway       = COALESCE($4, colorway),
-        color          = COALESCE($5, color),
-        price          = COALESCE($6, price),
-        sizes          = COALESCE($7, sizes),
-        available_sizes= COALESCE($8, available_sizes),
-        images         = COALESCE($9, images),
-        spec           = COALESCE($10, spec),
-        updated_at     = NOW()
-       WHERE id = $11
-       RETURNING *`,
-      [
-        brand_slug, model_slug, name, colorway, color,
-        price ? parseInt(price) : null,
-        sizes ? JSON.stringify(sizes) : null,
-        available_sizes ? JSON.stringify(available_sizes) : null,
-        images ? JSON.stringify(images) : null,
-        spec ? JSON.stringify(spec) : null,
-        req.params.id,
-      ]
+    const info = db.prepare(`
+      UPDATE products SET
+        brand_slug      = COALESCE(?, brand_slug),
+        model_slug      = COALESCE(?, model_slug),
+        name            = COALESCE(?, name),
+        colorway        = COALESCE(?, colorway),
+        color           = COALESCE(?, color),
+        price           = COALESCE(?, price),
+        sizes           = COALESCE(?, sizes),
+        available_sizes = COALESCE(?, available_sizes),
+        images          = COALESCE(?, images),
+        spec            = COALESCE(?, spec),
+        updated_at      = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      brand_slug      || null,
+      model_slug      || null,
+      name            || null,
+      colorway        !== undefined ? colorway : null,
+      color           || null,
+      price           ? parseInt(price) : null,
+      sizes           ? JSON.stringify(sizes)           : null,
+      available_sizes ? JSON.stringify(available_sizes) : null,
+      images          ? JSON.stringify(images)          : null,
+      spec            ? JSON.stringify(spec)            : null,
+      req.params.id,
     );
-    if (!rows.length) return res.status(404).json({ error: 'Producto no encontrado' });
-    res.json(rows[0]);
+    if (!info.changes) return res.status(404).json({ error: 'Producto no encontrado' });
+    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id);
+    res.json(parseProduct(product));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error actualizando producto' });
@@ -133,10 +135,10 @@ router.put('/:id', requireAuth, async (req, res) => {
 });
 
 /* DELETE /api/stock/:id — requires auth */
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', requireAuth, (req, res) => {
   try {
-    const { rowCount } = await pool.query('DELETE FROM products WHERE id = $1', [req.params.id]);
-    if (!rowCount) return res.status(404).json({ error: 'Producto no encontrado' });
+    const info = db.prepare('DELETE FROM products WHERE id = ?').run(req.params.id);
+    if (!info.changes) return res.status(404).json({ error: 'Producto no encontrado' });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Error eliminando producto' });
