@@ -1,29 +1,24 @@
 const express = require('express');
-const router = express.Router();
-const { pool } = require('../data/db');
+const router  = express.Router();
+const { db, parseArticle } = require('../data/db');
 const { requireAuth } = require('../middleware/auth');
 
 /* GET /api/lanzamientos
-   Parámetros opcionales:
-   - home=true  → solo los que tienen show_on_home=true, ordenados por home_position
-   - limit=N    → limitar resultados
+   ?home=true  → solo show_on_home=1, ordenados por home_position
+   ?limit=N    → limitar resultados
 */
-router.get('/', async (req, res) => {
+router.get('/', (req, res) => {
   try {
     const { home, limit } = req.query;
-    let query = 'SELECT * FROM articles';
-    const params = [];
+    let sql = 'SELECT * FROM articles';
     if (home === 'true') {
-      query += ' WHERE show_on_home = TRUE ORDER BY home_position ASC';
+      sql += ' WHERE show_on_home = 1 ORDER BY home_position ASC';
     } else {
-      query += ' ORDER BY home_position ASC, created_at DESC';
+      sql += ' ORDER BY home_position ASC, created_at DESC';
     }
-    if (limit) {
-      params.push(parseInt(limit));
-      query += ` LIMIT $${params.length}`;
-    }
-    const { rows } = await pool.query(query, params);
-    res.json(rows);
+    if (limit) sql += ` LIMIT ${parseInt(limit) || 100}`;
+    const rows = db.prepare(sql).all();
+    res.json(rows.map(parseArticle));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error obteniendo lanzamientos' });
@@ -31,18 +26,18 @@ router.get('/', async (req, res) => {
 });
 
 /* GET /api/lanzamientos/:slug */
-router.get('/:slug', async (req, res) => {
+router.get('/:slug', (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM articles WHERE slug = $1', [req.params.slug]);
-    if (!rows.length) return res.status(404).json({ error: 'Artículo no encontrado' });
-    res.json(rows[0]);
+    const row = db.prepare('SELECT * FROM articles WHERE slug = ?').get(req.params.slug);
+    if (!row) return res.status(404).json({ error: 'Artículo no encontrado' });
+    res.json(parseArticle(row));
   } catch (err) {
     res.status(500).json({ error: 'Error obteniendo artículo' });
   }
 });
 
 /* POST /api/lanzamientos — requires auth */
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, (req, res) => {
   const {
     slug, brand, category, title, subtitle, excerpt, date, cover,
     featured, body, related_product, show_on_home, home_position,
@@ -51,65 +46,70 @@ router.post('/', requireAuth, async (req, res) => {
   if (!slug || !title) return res.status(400).json({ error: 'slug y title son obligatorios' });
 
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO articles
+    const info = db.prepare(`
+      INSERT INTO articles
         (slug, brand, category, title, subtitle, excerpt, date, cover,
          featured, body, related_product, show_on_home, home_position)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       RETURNING *`,
-      [
-        slug, brand, category || 'LANZAMIENTO', title, subtitle, excerpt,
-        date, cover, featured || false,
-        JSON.stringify(body || []),
-        related_product ? JSON.stringify(related_product) : null,
-        show_on_home !== false, home_position || 0,
-      ]
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `).run(
+      slug, brand, category || 'LANZAMIENTO', title, subtitle || null, excerpt || null,
+      date || null, cover || null, featured ? 1 : 0,
+      JSON.stringify(body || []),
+      related_product ? JSON.stringify(related_product) : null,
+      show_on_home !== false ? 1 : 0, home_position || 0,
     );
-    res.status(201).json(rows[0]);
+    const article = db.prepare('SELECT * FROM articles WHERE id = ?').get(info.lastInsertRowid);
+    res.status(201).json(parseArticle(article));
   } catch (err) {
-    if (err.code === '23505') return res.status(409).json({ error: 'Ya existe un artículo con ese slug' });
+    if (err.message.includes('UNIQUE constraint failed')) {
+      return res.status(409).json({ error: 'Ya existe un artículo con ese slug' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error creando artículo' });
   }
 });
 
 /* PUT /api/lanzamientos/:id — requires auth */
-router.put('/:id', requireAuth, async (req, res) => {
+router.put('/:id', requireAuth, (req, res) => {
   const {
     slug, brand, category, title, subtitle, excerpt, date, cover,
     featured, body, related_product, show_on_home, home_position,
   } = req.body;
 
   try {
-    const { rows } = await pool.query(
-      `UPDATE articles SET
-        slug = COALESCE($1, slug),
-        brand = COALESCE($2, brand),
-        category = COALESCE($3, category),
-        title = COALESCE($4, title),
-        subtitle = $5,
-        excerpt = $6,
-        date = COALESCE($7, date),
-        cover = $8,
-        featured = COALESCE($9, featured),
-        body = COALESCE($10, body),
-        related_product = $11,
-        show_on_home = COALESCE($12, show_on_home),
-        home_position = COALESCE($13, home_position),
-        updated_at = NOW()
-       WHERE id = $14
-       RETURNING *`,
-      [
-        slug, brand, category, title, subtitle, excerpt, date, cover,
-        featured,
-        body ? JSON.stringify(body) : null,
-        related_product ? JSON.stringify(related_product) : null,
-        show_on_home, home_position,
-        req.params.id,
-      ]
+    const info = db.prepare(`
+      UPDATE articles SET
+        slug            = COALESCE(?, slug),
+        brand           = COALESCE(?, brand),
+        category        = COALESCE(?, category),
+        title           = COALESCE(?, title),
+        subtitle        = ?,
+        excerpt         = ?,
+        date            = COALESCE(?, date),
+        cover           = ?,
+        featured        = COALESCE(?, featured),
+        body            = COALESCE(?, body),
+        related_product = ?,
+        show_on_home    = COALESCE(?, show_on_home),
+        home_position   = COALESCE(?, home_position),
+        updated_at      = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      slug || null, brand || null, category || null, title || null,
+      subtitle !== undefined ? subtitle : null,
+      excerpt  !== undefined ? excerpt  : null,
+      date     || null,
+      cover    !== undefined ? cover    : null,
+      featured !== undefined ? (featured ? 1 : 0) : null,
+      body ? JSON.stringify(body) : null,
+      related_product ? JSON.stringify(related_product) : null,
+      show_on_home !== undefined ? (show_on_home ? 1 : 0) : null,
+      home_position !== undefined ? home_position : null,
+      req.params.id,
     );
-    if (!rows.length) return res.status(404).json({ error: 'Artículo no encontrado' });
-    res.json(rows[0]);
+    if (!info.changes) return res.status(404).json({ error: 'Artículo no encontrado' });
+    const article = db.prepare('SELECT * FROM articles WHERE id = ?').get(req.params.id);
+    res.json(parseArticle(article));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error actualizando artículo' });
@@ -117,10 +117,10 @@ router.put('/:id', requireAuth, async (req, res) => {
 });
 
 /* DELETE /api/lanzamientos/:id — requires auth */
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', requireAuth, (req, res) => {
   try {
-    const { rowCount } = await pool.query('DELETE FROM articles WHERE id = $1', [req.params.id]);
-    if (!rowCount) return res.status(404).json({ error: 'Artículo no encontrado' });
+    const info = db.prepare('DELETE FROM articles WHERE id = ?').run(req.params.id);
+    if (!info.changes) return res.status(404).json({ error: 'Artículo no encontrado' });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: 'Error eliminando artículo' });

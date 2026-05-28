@@ -61,11 +61,10 @@ app.use((err, req, res, _next) => {
 });
 
 /* ───── Arrancar ───── */
-initDB()
-  .then(() => {
-    app.listen(PORT, () => console.log(`🚀 Servidor en puerto ${PORT}`));
-  })
-  .catch(err => {
-    console.error('❌ No se pudo inicializar la DB:', err.message);
-    process.exit(1);
-  });
+try {
+  initDB();
+} catch (err) {
+  console.error('❌ No se pudo inicializar la DB:', err.message);
+  process.exit(1);
+}
+app.listen(PORT, () => console.log(`🚀 Servidor en puerto ${PORT}`));

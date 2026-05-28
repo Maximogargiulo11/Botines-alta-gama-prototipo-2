@@ -5,7 +5,7 @@ services:
   - type: web
     name: botines-alta-gama
     env: node
-    region: oregon          # cambiá a "frankfurt" si querés Europa
+    region: oregon
     plan: free
     buildCommand: npm install
     startCommand: npm start
@@ -15,9 +15,12 @@ services:
       - key: NODE_ENV
         value: production
 
-      # Estas tres las cargás manualmente en el dashboard de Render:
+      - key: DB_PATH
+        value: ./data/database.db
+
+      # Estas las cargás manualmente en el dashboard de Render:
       - key: ADMIN_USERNAME
-        sync: false         # Render te las va a pedir al deployar
+        sync: false
 
       - key: ADMIN_PASSWORD
         sync: false
@@ -28,16 +31,3 @@ services:
       # URL del frontend (Vercel u otro) — para CORS:
       - key: FRONTEND_URL
         sync: false
-
-      # La URL de la DB se inyecta automáticamente desde la db de abajo:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: botines-db
-          property: connectionString
-
-databases:
-  - name: botines-db
-    databaseName: botines_alta_gama
-    user: botines_user
-    region: oregon
-    plan: free              # PostgreSQL gratis en Render (expira en 90 días en free tier)
