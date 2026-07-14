@@ -75,6 +75,22 @@ async function initDB() {
       )
     `);
 
+    /* ---- ORDERS ---- */
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS orders (
+        id           SERIAL PRIMARY KEY,
+        status       TEXT    NOT NULL DEFAULT 'pending',
+        customer_name  TEXT  NOT NULL,
+        customer_email TEXT  NOT NULL,
+        customer_phone TEXT,
+        items        JSONB   NOT NULL DEFAULT '[]',
+        total        INTEGER NOT NULL DEFAULT 0,
+        notes        TEXT,
+        created_at   TIMESTAMP DEFAULT NOW(),
+        updated_at   TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
     /* ---- SETTINGS ---- */
     await client.query(`
       CREATE TABLE IF NOT EXISTS settings (

@@ -1,11 +1,17 @@
 require('dotenv').config();
-const express = require('express');
-const cors    = require('cors');
-const path    = require('path');
+const express    = require('express');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const path       = require('path');
+const rateLimit  = require('express-rate-limit');
 const { initDB } = require('./data/db');
 
 const app  = express();
 const PORT = process.env.PORT || 3001;
+const isProd = process.env.NODE_ENV === 'production';
+
+/* ───── Seguridad HTTP headers ───── */
+app.use(helmet({ contentSecurityPolicy: false }));
 
 /* ───── CORS ───── */
 const allowedOrigins = [
@@ -15,18 +21,31 @@ const allowedOrigins = [
 ];
 app.use(cors({
   origin: (origin, cb) => {
-    // Sin origen = request interno (server-to-server) o mismo origen → OK
     if (!origin) return cb(null, true);
-    // Si el origen está en la lista → OK
     if (allowedOrigins.some(o => origin.startsWith(o))) return cb(null, true);
-    // En producción podrías rechazar: return cb(new Error('CORS'));
-    // Por ahora permitimos todo para evitar problemas en desarrollo
-    return cb(null, true);
+    if (!isProd) return cb(null, true);
+    return cb(new Error('Origen no permitido'));
   },
   credentials: true,
 }));
 
-app.use(express.json({ limit: '4mb' }));
+/* ───── Rate limiting global ───── */
+app.use('/api/', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Demasiadas solicitudes, intenta más tarde' },
+}));
+
+/* ───── Rate limiting estricto para login ───── */
+app.use('/api/admin/login', rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Demasiados intentos de login, intenta en 15 minutos' },
+}));
+
+app.use(express.json({ limit: '1mb' }));
 
 /* ───── Archivos estáticos (frontend) ───── */
 app.use(express.static(path.join(__dirname)));
@@ -42,6 +61,7 @@ app.use('/api/lanzamientos', require('./routes/lanzamientos'));
 app.use('/api/stock',        require('./routes/stock'));
 app.use('/api/marcas',       require('./routes/marcas'));
 app.use('/api/settings',     require('./routes/settings'));
+app.use('/api/orders',       require('./routes/orders'));
 
 /* Health check */
 app.get('/api/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
@@ -57,7 +77,8 @@ app.get('*', (req, res) => {
 /* ───── Error handler ───── */
 app.use((err, req, res, _next) => {
   console.error(err);
-  res.status(500).json({ error: err.message || 'Error interno del servidor' });
+  const message = isProd ? 'Error interno del servidor' : (err.message || 'Error interno del servidor');
+  res.status(err.status || 500).json({ error: message });
 });
 
 /* ───── Arrancar ───── */

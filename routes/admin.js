@@ -1,20 +1,32 @@
-const express = require('express');
-const jwt = require('jsonwebtoken');
-const router = express.Router();
+const express  = require('express');
+const jwt      = require('jsonwebtoken');
+const bcrypt   = require('bcryptjs');
+const router   = express.Router();
 
 /* POST /api/admin/login */
-router.post('/login', (req, res) => {
+router.post('/login', async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Usuario y contraseña requeridos' });
   }
-  if (
-    username !== process.env.ADMIN_USERNAME ||
-    password !== process.env.ADMIN_PASSWORD
-  ) {
+
+  const validUser = username === process.env.ADMIN_USERNAME;
+  const storedPassword = process.env.ADMIN_PASSWORD || '';
+
+  let validPassword = false;
+  if (storedPassword.startsWith('$2')) {
+    // Contraseña hasheada con bcrypt
+    validPassword = await bcrypt.compare(password, storedPassword);
+  } else {
+    // Comparación directa (para migración — usar bcrypt en producción)
+    validPassword = password === storedPassword;
+  }
+
+  if (!validUser || !validPassword) {
     return res.status(401).json({ error: 'Credenciales incorrectas' });
   }
-  const token = jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+  const token = jwt.sign({ username }, process.env.JWT_SECRET, { expiresIn: '24h' });
   res.json({ token });
 });
 
